@@ -1,7 +1,7 @@
 mod exec;
 
 use cfg::{
-    opcode::{arity, is_push},
+    opcode::{arity, is_push, Opcode},
     Block,
 };
 use proptest::{
@@ -11,8 +11,10 @@ use proptest::{
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum JType {
+    /// block not jumping
+    No,
     /// variant of PUSH(N) for every case
-    Concrete(usize),
+    Concrete(Vec<u8>),
     /// value cannot be known at compile time
     Symbolic,
     /// value is already on the stack
@@ -75,11 +77,15 @@ impl BytecodeRunner {
 
     fn get_jump(block: &Block) -> JType {
         let mut loc_arity = 0;
+        let jump = block.instructions.last().unwrap().opcode == Opcode::JUMP;
+        let jumpi = block.instructions.last().unwrap().opcode == Opcode::JUMPI;
         for instr in block.instructions.iter().rev() {
-            loc_arity += arity(instr);
-            if loc_arity >= 1 {
-                if is_push(instr) {
-                    return JType::Concrete(0); // TODO we should get the location pc here
+            loc_arity += arity(&instr.opcode);
+            if !(jumpi || jump) {
+                return JType::No;
+            } else if (loc_arity >= 1 && jumpi) || jump {
+                if is_push(&instr.opcode) {
+                    return JType::Concrete(instr.pushes.clone());
                 } else {
                     return JType::Symbolic;
                 }
@@ -115,7 +121,7 @@ impl BytecodeRunner {
 #[cfg(test)]
 mod tests {
     use crate::{BytecodeRunner, JType};
-    use cfg::{opcode::Opcode, Block};
+    use cfg::{op, opcode::Opcode, Block, Operation};
 
     #[test]
     fn cfg_to_jcfg() {
@@ -125,8 +131,8 @@ mod tests {
                 end: 15,
                 #[rustfmt::skip]
                 instructions: vec![
-                    Opcode::PUSH0, Opcode::CALLDATALOAD, Opcode::PUSH1, Opcode::SHR,
-                    Opcode::DUP1, Opcode::PUSH4, Opcode::EQ, Opcode::PUSH2, Opcode::JUMPI,
+                    op!(PUSH0), op!(CALLDATALOAD), op!(PUSH1), op!(SHR),
+                    op!(DUP1), op!(PUSH4), op!(EQ), op!(PUSH2, [0, 16]), op!(JUMPI),
                 ],
             },
             Block {
@@ -134,7 +140,7 @@ mod tests {
                 end: 26,
                 #[rustfmt::skip]
                 instructions: vec![
-                    Opcode::DUP1, Opcode::PUSH4, Opcode::EQ, Opcode::PUSH2, Opcode::JUMPI,
+                    op!(DUP1), op!(PUSH4), op!(EQ), op!(PUSH2, [0, 27]), op!(JUMPI),
                 ],
             },
             Block {
@@ -142,7 +148,7 @@ mod tests {
                 end: 37,
                 #[rustfmt::skip]
                 instructions: vec![
-                    Opcode::DUP1, Opcode::PUSH4, Opcode::EQ, Opcode::PUSH2, Opcode::JUMPI,
+                    op!(DUP1), op!(PUSH4), op!(EQ), op!(PUSH2, [0, 38]), op!(JUMPI),
                 ],
             },
             Block {
@@ -150,7 +156,7 @@ mod tests {
                 end: 40,
                 #[rustfmt::skip]
                 instructions: vec![
-                    Opcode::PUSH0, Opcode::PUSH0, Opcode::REVERT
+                    op!(PUSH0), op!(PUSH0), op!(REVERT)
                 ],
             },
         ];
@@ -158,7 +164,7 @@ mod tests {
         let jcfg = BytecodeRunner::glue(cfg);
 
         // all jumps should be concrete here!
-        assert!(!jcfg
+        assert!(!jcfg[..jcfg.len() - 1]
             .iter()
             .any(|jblock| !matches!(jblock.jump, JType::Concrete(_))));
 
@@ -166,8 +172,15 @@ mod tests {
             .iter()
             .filter(|jblock| matches!(jblock.jump, JType::Concrete(_)))
             .map(|jblock| {
-                if let JType::Concrete(pc) = jblock.jump {
-                    pc
+                if let JType::Concrete(mut pc) = jblock.jump.clone() {
+                    let mut new = if pc.len() <= 8 {
+                        vec![0; 8 - pc.len()]
+                    } else {
+                        unimplemented!();
+                    };
+                    new.append(&mut pc);
+                    let arr: [u8; 8] = new.try_into().unwrap();
+                    usize::from_be_bytes(arr)
                 } else {
                     unreachable!()
                 }

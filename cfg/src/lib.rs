@@ -35,7 +35,7 @@ impl From<&str> for Bytecode {
 pub struct Block {
     pub start: usize,
     pub end: usize,
-    pub instructions: Vec<Opcode>,
+    pub instructions: Vec<Operation>,
 }
 
 // #[derive(Debug, Clone, PartialEq)]
@@ -43,22 +43,34 @@ pub struct Block {
 //     blocks: Vec<Block>,
 // }
 
+#[derive(Debug, PartialEq, Clone, Default)]
+pub struct Operation {
+    pub opcode: Opcode,
+    pub pushes: Vec<u8>,
+}
+
 impl Bytecode {
-    pub fn as_mnemonics(&self) -> Vec<Opcode> {
+    pub fn as_mnemonics(&self) -> Vec<Operation> {
         let bytes = &self.0;
         let mut instructions = Vec::new();
         let mut i = 0usize;
         while i < bytes.len() {
-            let opcode = if let Some(opcode) = byte_as_opcode(bytes.get(i).unwrap()) {
-                if let Some(size) = push_size(&opcode) {
+            let (opcode, pushes) = if let Some(opcode) = byte_as_opcode(bytes.get(i).unwrap()) {
+                let pushes = if let Some(size) = push_size(&opcode) {
                     i += size;
-                }
+                    bytes
+                        .get((i + 1)..(i + 1 + size))
+                        .unwrap_or_default()
+                        .to_owned()
+                } else {
+                    Vec::new()
+                };
 
-                opcode
+                (opcode, pushes)
             } else {
-                Opcode::INVALID
+                (Opcode::INVALID, Vec::new())
             };
-            instructions.push(opcode);
+            instructions.push(Operation { opcode, pushes });
             i += 1;
         }
 
@@ -70,16 +82,16 @@ impl Bytecode {
         Self::mnemonics_to_cfg(mnemonics)
     }
 
-    pub fn mnemonics_to_cfg(mnemonics: Vec<Opcode>) -> Vec<Block> {
+    pub fn mnemonics_to_cfg(mnemonics: Vec<Operation>) -> Vec<Block> {
         let mut blocks = Vec::new();
         let mut pc = 0usize;
         let mut block = Self::make_block(pc);
         let mut instructions = Vec::new();
         let mut mnemonics = mnemonics.into_iter();
         let last_instruction = mnemonics.next_back();
-        for opcode in mnemonics {
-            instructions.push(opcode);
-            if is_terminating(&opcode) {
+        for op in mnemonics {
+            instructions.push(op.clone());
+            if is_terminating(&op.opcode) {
                 block.end = pc;
                 block.instructions = instructions;
                 blocks.push(block);
@@ -92,8 +104,8 @@ impl Bytecode {
                 pc += 1;
             }
 
-            if is_push(&opcode) {
-                pc += push_size(&opcode).unwrap();
+            if is_push(&op.opcode) {
+                pc += push_size(&op.opcode).unwrap();
             }
         }
 
@@ -176,18 +188,21 @@ mod tests {
         let code = vec![0x5F, 0x5F, 0x01];
         let bytecode = Bytecode::from(code);
         let mnemonics = bytecode.as_mnemonics();
-        assert_eq!(mnemonics, vec![Opcode::PUSH0, Opcode::PUSH0, Opcode::ADD]);
+        assert_eq!(
+            mnemonics.into_iter().map(|m| m.opcode).collect::<Vec<_>>(),
+            vec![Opcode::PUSH0, Opcode::PUSH0, Opcode::ADD]
+        );
     }
 
     #[test]
     fn flat_cfg() {
         #[rustfmt::skip]
         let mnemonics = vec![
-            Opcode::PUSH0, Opcode::CALLDATALOAD, Opcode::PUSH1, Opcode::SHL,
-            Opcode::DUP1, Opcode::PUSH4, Opcode::EQ, Opcode::PUSH2, Opcode::JUMPI,
-            Opcode::DUP1, Opcode::PUSH4, Opcode::EQ, Opcode::PUSH2, Opcode::JUMPI,
-            Opcode::DUP1, Opcode::PUSH4, Opcode::EQ, Opcode::PUSH2, Opcode::JUMPI,
-            Opcode::PUSH0, Opcode::PUSH0, Opcode::REVERT
+            op!(PUSH0), op!(CALLDATALOAD), op!(PUSH1), op!(SHL),
+            op!(DUP1), op!(PUSH4), op!(EQ), op!(PUSH2), op!(JUMPI),
+            op!(DUP1), op!(PUSH4), op!(EQ), op!(PUSH2), op!(JUMPI),
+            op!(DUP1), op!(PUSH4), op!(EQ), op!(PUSH2), op!(JUMPI),
+            op!(PUSH0), op!(PUSH0), op!(REVERT)
         ];
 
         let cfg = vec![
@@ -196,8 +211,8 @@ mod tests {
                 end: 15,
                 #[rustfmt::skip]
                 instructions: vec![
-                    Opcode::PUSH0, Opcode::CALLDATALOAD, Opcode::PUSH1, Opcode::SHL,
-                    Opcode::DUP1, Opcode::PUSH4, Opcode::EQ, Opcode::PUSH2, Opcode::JUMPI,
+                    op!(PUSH0), op!(CALLDATALOAD), op!(PUSH1), op!(SHL),
+                    op!(DUP1), op!(PUSH4), op!(EQ), op!(PUSH2), op!(JUMPI),
                 ],
             },
             Block {
@@ -205,7 +220,7 @@ mod tests {
                 end: 26,
                 #[rustfmt::skip]
                 instructions: vec![
-                    Opcode::DUP1, Opcode::PUSH4, Opcode::EQ, Opcode::PUSH2, Opcode::JUMPI,
+                    op!(DUP1), op!(PUSH4), op!(EQ), op!(PUSH2), op!(JUMPI),
                 ],
             },
             Block {
@@ -213,7 +228,7 @@ mod tests {
                 end: 37,
                 #[rustfmt::skip]
                 instructions: vec![
-                    Opcode::DUP1, Opcode::PUSH4, Opcode::EQ, Opcode::PUSH2, Opcode::JUMPI,
+                    op!(DUP1), op!(PUSH4), op!(EQ), op!(PUSH2), op!(JUMPI),
                 ],
             },
             Block {
@@ -221,7 +236,7 @@ mod tests {
                 end: 40,
                 #[rustfmt::skip]
                 instructions: vec![
-                    Opcode::PUSH0, Opcode::PUSH0, Opcode::REVERT
+                    op!(PUSH0), op!(PUSH0), op!(REVERT)
                 ],
             },
         ];

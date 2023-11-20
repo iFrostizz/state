@@ -1,6 +1,7 @@
 #[allow(clippy::upper_case_acronyms)]
-#[derive(Debug, PartialEq, Clone, Copy)]
+#[derive(Debug, PartialEq, Clone, Copy, Default)]
 pub enum Opcode {
+    #[default]
     STOP,
     ADD,
     MUL,
@@ -708,4 +709,69 @@ pub fn is_terminating(opcode: &Opcode) -> bool {
             | Opcode::SELFDESTRUCT
             | Opcode::INVALID
     )
+}
+
+/// define an opcode which is turned into an operation with pushes if specified
+#[macro_export]
+macro_rules! op {
+    ($code:ident) => {
+        Operation {
+            opcode: Opcode::$code,
+            pushes: Vec::new()
+        }
+    };
+    ($code:ident, [$($pushes:expr),+ $(,)?]) => {
+        Operation {
+            opcode: Opcode::$code,
+            pushes: vec![$($pushes),+]
+        }
+    };
+    ($code:ident, $pushes:expr) => {
+        Operation {
+            opcode: Opcode::$code,
+            pushes: vec![$pushes]
+        }
+    };
+}
+
+mod tests {
+    use crate::{opcode::Opcode, Operation};
+
+    #[test]
+    fn test_op() {
+        assert_eq!(
+            op!(DUP1),
+            Operation {
+                opcode: Opcode::DUP1,
+                ..Default::default()
+            }
+        )
+    }
+
+    #[test]
+    fn op_push() {
+        assert_eq!(
+            op!(PUSH0),
+            Operation {
+                opcode: Opcode::PUSH0,
+                ..Default::default()
+            }
+        );
+
+        assert_eq!(
+            op!(PUSH1, 0),
+            Operation {
+                opcode: Opcode::PUSH1,
+                pushes: vec![0]
+            }
+        );
+
+        assert_eq!(
+            op!(PUSH2, [255, 255]),
+            Operation {
+                opcode: Opcode::PUSH2,
+                pushes: vec![255, 255]
+            }
+        );
+    }
 }
